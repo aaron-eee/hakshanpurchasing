@@ -28,7 +28,11 @@ export default function Page() {
       supabase.from("warehouse").select("*, take_log(*)").order("created_at", { ascending: false }),
       supabase.from("locations").select("*").order("sort_ord", { ascending: true }),
     ]);
-    (its || []).forEach((it) => it.suppliers?.sort((a, b) => a.sort_ord - b.sort_ord));
+    (its || []).forEach((it) => {
+      it.suppliers?.sort((a, b) => a.sort_ord - b.sort_ord);
+      if (it.purchases && !Array.isArray(it.purchases)) it.purchases = [it.purchases];
+      else if (!it.purchases) it.purchases = [];
+    });
     (wh || []).forEach((w) => w.take_log?.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
     setItems(its || []);
     setWarehouse(wh || []);
@@ -65,7 +69,6 @@ export default function Page() {
 
   return (
     <div style={{ fontFamily: sans, color: C.text, background: C.cream, minHeight: "100vh", display: "flex" }}>
-      {/* SIDEBAR */}
       <aside style={{ width: 250, background: `linear-gradient(180deg, ${C.ink} 0%, ${C.inkSoft} 100%)`,
         display: "flex", flexDirection: "column", flexShrink: 0, position: "sticky", top: 0, height: "100vh" }}>
         <div style={{ padding: "30px 24px 24px", textAlign: "center", borderBottom: `1px solid ${C.lineDk}` }}>
@@ -99,7 +102,6 @@ export default function Page() {
         </div>
       </aside>
 
-      {/* MAIN */}
       <main style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14, padding: "18px 32px" }}>
           <div style={{ width: 40, height: 40, borderRadius: 999, background: "#fff", border: `1px solid ${C.line}`,
