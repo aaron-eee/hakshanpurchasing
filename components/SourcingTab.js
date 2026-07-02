@@ -137,10 +137,13 @@ function SupplierCard({ supplier: s, item, chosen, hasDraft, reload, locations }
 
   const choose = async () => {
     // create a DRAFT purchase — item stays in "sourcing" until Confirm Purchase is pressed
-    await supabase.from("purchases").upsert({
-      item_id: item.id, supplier_id: s.id, supplier_name: s.name, image_url: s.image_url,
-      unit_price: s.price, quantity: 1, location: locations[0], confirmed: false, arrived: false,
+    const loc = (locations && locations[0]) || "Cheras Warehouse";
+    const price = s.price === "" || s.price == null ? null : Number(s.price);
+    const { error } = await supabase.from("purchases").upsert({
+      item_id: item.id, supplier_id: s.id, supplier_name: s.name || "Supplier", image_url: s.image_url || null,
+      unit_price: price, quantity: 1, location: loc, confirmed: false, arrived: false,
     }, { onConflict: "item_id" });
+    if (error) { alert("Could not start purchase: " + error.message); return; }
     reload();
   };
 
