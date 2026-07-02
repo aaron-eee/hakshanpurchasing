@@ -64,10 +64,10 @@ export default function SourcingTab({ items, reload }) {
 }
 
 function SourcingCard({ item, expanded, toggle, reload }) {
-  const [label, tone] = statusMeta(item.status);
   const purchase = item.purchases?.[0] || null;
+  const isDraft = item.status === "sourcing" && purchase && !purchase.confirmed;
+  const [label, tone] = isDraft ? ["Selecting · 填写采购中", "amber"] : statusMeta(item.status);
 
-  // value labels — unit price + total value
   const unit = purchase?.unit_price ?? (purchase ? null : bestPrice(item));
   const qty = purchase?.quantity ?? 1;
   const total = unit != null ? unit * qty : null;
@@ -90,7 +90,6 @@ function SourcingCard({ item, expanded, toggle, reload }) {
           <div style={{ fontFamily: serif, fontWeight: 600, fontSize: 22, color: C.text }}>{item.name}</div>
           <div style={{ fontSize: 12, color: C.sub, marginTop: 3, letterSpacing: ".04em" }}>{item.category} · {item.suppliers?.length || 0} supplier{(item.suppliers?.length || 0) !== 1 ? "s" : ""}</div>
         </div>
-        {/* value labels — always visible */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginRight: 6 }}>
           {unit != null && <Badge tone="gray">Unit 单价 {fmtMoney(unit)}</Badge>}
           {total != null && <Badge tone="gold">Total 总价值 {fmtMoney(total)}</Badge>}
@@ -102,12 +101,12 @@ function SourcingCard({ item, expanded, toggle, reload }) {
         <div style={{ borderTop: `1px solid ${C.line}`, padding: 22, background: C.panel }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
             <span style={{ fontFamily: serif, fontSize: 18, fontWeight: 600, color: C.text }}>Suppliers <span style={{ color: C.gold, fontSize: 14 }}>供应商</span></span>
-            {item.status === "sourcing" && <Btn size="sm" variant="ghost" onClick={addSup}><Plus size={13} /> Add supplier</Btn>}
+            {item.status === "sourcing" && !purchase && <Btn size="sm" variant="ghost" onClick={addSup}><Plus size={13} /> Add supplier</Btn>}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 14, marginBottom: 18 }}>
             {(item.suppliers || []).map((s) => (
-              <SupplierCard key={s.id} supplier={s} item={item} chosen={purchase?.supplier_id === s.id} reload={reload} />
+              <SupplierCard key={s.id} supplier={s} item={item} chosen={purchase?.supplier_id === s.id} hasDraft={!!purchase} reload={reload} />
             ))}
             {(item.suppliers?.length || 0) === 0 && <div style={{ color: C.subLt, fontSize: 13, gridColumn: "1/-1", padding: 12 }}>No suppliers added yet.</div>}
           </div>
@@ -128,13 +127,12 @@ function bestPrice(item) {
   return ps.length ? Math.min(...ps) : null;
 }
 
-function SupplierCard({ supplier: s, item, chosen, reload }) {
-  const editable = item.status === "sourcing";
+function SupplierCard({ supplier: s, item, chosen, hasDraft, reload }) {
+  const editable = item.status === "sourcing" && !hasDraft;
   const save = async (patch) => { await supabase.from("suppliers").update(patch).eq("id", s.id); reload(); };
   const del = async () => { await supabase.from("suppliers").delete().eq("id", s.id); reload(); };
 
   const choose = async () => {
-    await supabase.from("items").update({ status: "purchased" }).eq("id", item.id);
     await supabase.from("purchases").upsert({
       item_id: item.id, supplier_id: s.id, supplier_name: s.name, image_url: s.image_url,
       unit_price: s.price, quantity: 1, location: LOCATIONS[0], confirmed: false, arrived: false,
@@ -142,7 +140,11 @@ function SupplierCard({ supplier: s, item, chosen, reload }) {
     reload();
   };
 
-  // local buffered edits to avoid re-render churn
+  const cancelDraft = async () => {
+    await supabase.from("purchases").delete().eq("item_id", item.id);
+    reload();
+  };
+
   const [local, setLocal] = useState(s);
   React.useEffect(() => setLocal(s), [s.id]);
   const upd = (k, v) => setLocal((x) => ({ ...x, [k]: v }));
@@ -168,7 +170,16 @@ function SupplierCard({ supplier: s, item, chosen, reload }) {
           {s.image_url ? <img src={s.image_url} alt="" style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 10, marginBottom: 8 }} /> : null}
           <div style={{ fontSize: 14, color: C.text }}>{fmtMoney(s.price)} · {s.eta || "—"}</div>
           {s.note ? <div style={{ fontSize: 12, color: C.sub, marginTop: 3 }}>{s.note}</div> : null}
-          {chosen && <div style={{ marginTop: 8 }}><Badge tone="gold"><Check size={11} style={{ verticalAlign: -1 }} /> Chosen 已选</Badge></div>}
+          {chosen && (
+            <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Badge tone="gold"><Check size={11} style={{ verticalAlign: -1 }} /> Chosen 已选</Badge>
+              {item.status === "sourcing" && (
+                <button onClick={cancelDraft} style={{ border: "none", background: "none", cursor: "pointer", color: C.sub, fontSize: 12, textDecoration: "underline", padding: 0 }}>
+                  Change 换供应商
+                </button>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -189,9 +200,18 @@ function PurchaseSummary({ item, purchase: p, reload }) {
 
   const confirmPurchase = async () => {
     if (!canConfirm) { alert("Please fill in price, quantity, arrival date and location first."); return; }
-    await save({ confirmed: true, unit_price: local.unit_price, quantity: local.quantity, arrival_date: local.arrival_date, location: local.location });
+    await supabase.from("purchases").update({
+      confirmed: true, unit_price: local.unit_price, quantity: local.quantity,
+      arrival_date: local.arrival_date, location: local.location,
+    }).eq("id", p.id);
+    await supabase.from("items").update({ status: "purchased" }).eq("id", item.id);
+    reload();
   };
-  const reopen = async () => save({ confirmed: false });
+  const reopen = async () => {
+    await supabase.from("purchases").update({ confirmed: false }).eq("id", p.id);
+    await supabase.from("items").update({ status: "sourcing" }).eq("id", item.id);
+    reload();
+  };
 
   return (
     <div style={{ background: confirmed ? "linear-gradient(135deg,#f3ede1,#eadfc9)" : "linear-gradient(135deg, #faf3e6, #f6ecd6)",
