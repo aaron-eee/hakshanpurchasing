@@ -1,12 +1,37 @@
 "use client";
 import React, { useState } from "react";
-import { Truck, Package, MapPin, Clock, AlertCircle, Check, PackageOpen, Camera, X, BellRing } from "lucide-react";
+import { Truck, Package, MapPin, Clock, AlertCircle, Check, PackageOpen, Camera, X, CalendarPlus } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { C, serif, inp, Field, Badge, Btn, Empty, Head, fmtMoney } from "./ui";
 import ImageInput from "./ImageInput";
 import { daysBetween } from "../lib/constants";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+
+// Build a Google Calendar "add event" link for an arrival (all-day event on the arrival date)
+function gcalLink(it, p) {
+  if (!p.arrival_date) return null;
+  const start = p.arrival_date.replace(/-/g, "");
+  const end = new Date(new Date(p.arrival_date + "T00:00:00").getTime() + 86400000).toISOString().slice(0, 10).replace(/-/g, "");
+  const title = `📦 Arrival: ${it.name} ×${p.quantity} — ${p.location}`;
+  const details = [
+    `Item: ${it.name}`,
+    `Quantity: ${p.quantity}`,
+    `Supplier: ${p.supplier_name || "-"}`,
+    `Deliver to: ${p.location}`,
+    `Value: ${fmtMoney((Number(p.unit_price) || 0) * (Number(p.quantity) || 0))}`,
+    ``,
+    `HAKSHAN Supply Portal — please open, check & confirm on arrival.`,
+  ].join("\n");
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: title,
+    dates: `${start}/${end}`,
+    details,
+    location: p.location,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
 
 export default function ArrivalsTab({ items, reload }) {
   const [photoFor, setPhotoFor] = useState(null); // item pending arrival confirmation
@@ -27,7 +52,7 @@ export default function ArrivalsTab({ items, reload }) {
     <div>
       <Head eyebrow="RECEIVING" en="Arrivals" zh="到货接收" />
       <p style={{ margin: "-8px 0 22px", color: C.sub, fontSize: 13.5 }}>
-        When an order is due, Pui Teng is emailed automatically. Confirm arrival with an opening photo, then it enters the warehouse.
+        Add each arrival to Google Calendar so Pui Teng gets reminded. Confirm arrival with an opening photo, then it enters the warehouse.
       </p>
 
       {pending.length === 0 && <Empty icon={Truck} en="Nothing in transit" zh="确认采购后的物品会显示在这里" />}
@@ -54,14 +79,14 @@ export default function ArrivalsTab({ items, reload }) {
                   {it.status === "received" ? <Badge tone="gold">Arrived · needs opening & check 待开箱</Badge>
                     : due ? <Badge tone="red"><AlertCircle size={11} style={{ verticalAlign: -1 }} /> {d === 0 ? "Due today 今天到期" : `Overdue ${-d}d 逾期`}</Badge>
                     : <Badge tone="amber"><Clock size={11} style={{ verticalAlign: -1 }} /> {d} day{d !== 1 ? "s" : ""} left · 倒数</Badge>}
-                  {due && it.status !== "received" && (
-                    <span style={{ fontSize: 12, color: C.gold, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <BellRing size={12} /> {p.notified_at ? "Pui Teng notified 已通知" : "Auto-notify scheduled 将自动通知"}
-                    </span>
-                  )}
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 200 }}>
+                {gcalLink(it, p) && (
+                  <a href={gcalLink(it, p)} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+                    <Btn variant="ghost" size="sm" style={{ width: "100%" }}><CalendarPlus size={14} /> Add to Google Calendar 加入日历</Btn>
+                  </a>
+                )}
                 {it.status === "purchased" && <Btn variant="gold" onClick={() => setPhotoFor(it)}><Camera size={15} /> Confirm arrived 确认到货</Btn>}
                 {it.status === "received" && (
                   <>
