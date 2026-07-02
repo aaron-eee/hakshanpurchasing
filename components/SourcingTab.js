@@ -6,7 +6,7 @@ import {
 import { supabase } from "../lib/supabase";
 import { C, serif, inp, Field, Badge, Btn, Empty, Head, fmtMoney } from "./ui";
 import ImageInput from "./ImageInput";
-import { LOCATIONS, CATEGORIES, daysBetween } from "../lib/constants";
+import { CATEGORIES, daysBetween } from "../lib/constants";
 
 const NOTIFY_EMAIL = "puitenglee1995@gmail.com";
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -20,7 +20,7 @@ function statusMeta(s) {
   }[s] || ["", "gray"];
 }
 
-export default function SourcingTab({ items, reload }) {
+export default function SourcingTab({ items, reload, locations }) {
   const [expanded, setExpanded] = useState(items[0]?.id);
   const [showNew, setShowNew] = useState(false);
   const [name, setName] = useState("");
@@ -55,7 +55,7 @@ export default function SourcingTab({ items, reload }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         {active.map((it) => (
-          <SourcingCard key={it.id} item={it} reload={reload}
+          <SourcingCard key={it.id} item={it} reload={reload} locations={locations}
             expanded={expanded === it.id} toggle={() => setExpanded((e) => (e === it.id ? null : it.id))} />
         ))}
       </div>
@@ -63,11 +63,12 @@ export default function SourcingTab({ items, reload }) {
   );
 }
 
-function SourcingCard({ item, expanded, toggle, reload }) {
+function SourcingCard({ item, expanded, toggle, reload, locations }) {
   const purchase = item.purchases?.[0] || null;
   const isDraft = item.status === "sourcing" && purchase && !purchase.confirmed;
   const [label, tone] = isDraft ? ["Selecting · 填写采购中", "amber"] : statusMeta(item.status);
 
+  // value labels — unit price + total value
   const unit = purchase?.unit_price ?? (purchase ? null : bestPrice(item));
   const qty = purchase?.quantity ?? 1;
   const total = unit != null ? unit * qty : null;
@@ -90,6 +91,7 @@ function SourcingCard({ item, expanded, toggle, reload }) {
           <div style={{ fontFamily: serif, fontWeight: 600, fontSize: 22, color: C.text }}>{item.name}</div>
           <div style={{ fontSize: 12, color: C.sub, marginTop: 3, letterSpacing: ".04em" }}>{item.category} · {item.suppliers?.length || 0} supplier{(item.suppliers?.length || 0) !== 1 ? "s" : ""}</div>
         </div>
+        {/* value labels — always visible */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginRight: 6 }}>
           {unit != null && <Badge tone="gray">Unit 单价 {fmtMoney(unit)}</Badge>}
           {total != null && <Badge tone="gold">Total 总价值 {fmtMoney(total)}</Badge>}
@@ -101,17 +103,17 @@ function SourcingCard({ item, expanded, toggle, reload }) {
         <div style={{ borderTop: `1px solid ${C.line}`, padding: 22, background: C.panel }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
             <span style={{ fontFamily: serif, fontSize: 18, fontWeight: 600, color: C.text }}>Suppliers <span style={{ color: C.gold, fontSize: 14 }}>供应商</span></span>
-            {item.status === "sourcing" && !purchase && <Btn size="sm" variant="ghost" onClick={addSup}><Plus size={13} /> Add supplier</Btn>}
+            {item.status === "sourcing" && <Btn size="sm" variant="ghost" onClick={addSup}><Plus size={13} /> Add supplier</Btn>}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 14, marginBottom: 18 }}>
             {(item.suppliers || []).map((s) => (
-              <SupplierCard key={s.id} supplier={s} item={item} chosen={purchase?.supplier_id === s.id} hasDraft={!!purchase} reload={reload} />
+              <SupplierCard key={s.id} supplier={s} item={item} chosen={purchase?.supplier_id === s.id} hasDraft={!!purchase} reload={reload} locations={locations} />
             ))}
             {(item.suppliers?.length || 0) === 0 && <div style={{ color: C.subLt, fontSize: 13, gridColumn: "1/-1", padding: 12 }}>No suppliers added yet.</div>}
           </div>
 
-          {purchase && <PurchaseSummary item={item} purchase={purchase} reload={reload} />}
+          {purchase && <PurchaseSummary item={item} purchase={purchase} reload={reload} locations={locations} />}
 
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
             <Btn size="sm" variant="danger" onClick={del}><Trash2 size={13} /> Delete item</Btn>
@@ -127,24 +129,28 @@ function bestPrice(item) {
   return ps.length ? Math.min(...ps) : null;
 }
 
-function SupplierCard({ supplier: s, item, chosen, hasDraft, reload }) {
+function SupplierCard({ supplier: s, item, chosen, hasDraft, reload, locations }) {
+  // editable only while sourcing AND no purchase draft/selection exists yet
   const editable = item.status === "sourcing" && !hasDraft;
   const save = async (patch) => { await supabase.from("suppliers").update(patch).eq("id", s.id); reload(); };
   const del = async () => { await supabase.from("suppliers").delete().eq("id", s.id); reload(); };
 
   const choose = async () => {
+    // create a DRAFT purchase — item stays in "sourcing" until Confirm Purchase is pressed
     await supabase.from("purchases").upsert({
       item_id: item.id, supplier_id: s.id, supplier_name: s.name, image_url: s.image_url,
-      unit_price: s.price, quantity: 1, location: LOCATIONS[0], confirmed: false, arrived: false,
+      unit_price: s.price, quantity: 1, location: locations[0], confirmed: false, arrived: false,
     }, { onConflict: "item_id" });
     reload();
   };
 
   const cancelDraft = async () => {
+    // remove the draft purchase, unlocking suppliers again
     await supabase.from("purchases").delete().eq("item_id", item.id);
     reload();
   };
 
+  // local buffered edits to avoid re-render churn
   const [local, setLocal] = useState(s);
   React.useEffect(() => setLocal(s), [s.id]);
   const upd = (k, v) => setLocal((x) => ({ ...x, [k]: v }));
@@ -186,7 +192,7 @@ function SupplierCard({ supplier: s, item, chosen, hasDraft, reload }) {
   );
 }
 
-function PurchaseSummary({ item, purchase: p, reload }) {
+function PurchaseSummary({ item, purchase: p, reload, locations }) {
   const [local, setLocal] = useState(p);
   React.useEffect(() => setLocal(p), [p.id, p.confirmed]);
   const upd = (k, v) => setLocal((x) => ({ ...x, [k]: v }));
@@ -204,11 +210,13 @@ function PurchaseSummary({ item, purchase: p, reload }) {
       confirmed: true, unit_price: local.unit_price, quantity: local.quantity,
       arrival_date: local.arrival_date, location: local.location,
     }).eq("id", p.id);
+    // NOW the item becomes purchased and enters Arrivals
     await supabase.from("items").update({ status: "purchased" }).eq("id", item.id);
     reload();
   };
   const reopen = async () => {
     await supabase.from("purchases").update({ confirmed: false }).eq("id", p.id);
+    // move item back to sourcing so it leaves Arrivals while being edited
     await supabase.from("items").update({ status: "sourcing" }).eq("id", item.id);
     reload();
   };
@@ -243,7 +251,7 @@ function PurchaseSummary({ item, purchase: p, reload }) {
         </Field>
         <Field label="Deliver To 送往">
           <select style={inp} value={local.location} disabled={confirmed}
-            onChange={(e) => { upd("location", e.target.value); save({ location: e.target.value }); }}>{LOCATIONS.map((l) => <option key={l}>{l}</option>)}</select>
+            onChange={(e) => { upd("location", e.target.value); save({ location: e.target.value }); }}>{locations.map((l) => <option key={l}>{l}</option>)}</select>
         </Field>
       </div>
 

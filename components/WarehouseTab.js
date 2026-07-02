@@ -1,35 +1,60 @@
 "use client";
 import React, { useState, useMemo } from "react";
-import { Search, Warehouse, Package, MapPin, ArrowRight, Check, X, ChevronDown, ChevronRight, ArrowUpDown } from "lucide-react";
+import { Search, Warehouse, Package, MapPin, ArrowRight, Check, X, ChevronDown, ChevronRight, ArrowUpDown, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { C, serif, inp, Field, Badge, Btn, Empty, Head } from "./ui";
-import { LOCATIONS, CATEGORIES } from "../lib/constants";
+import { CATEGORIES } from "../lib/constants";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
 const SORTS = {
-  newest: { label: "Newest 最新", fn: (a, b) => new Date(b.created_at) - new Date(a.created_at) },
-  category: { label: "Category 类别", fn: (a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name) },
-  location: { label: "Location 地点", fn: (a, b) => a.location.localeCompare(b.location) || a.name.localeCompare(b.name) },
-  name: { label: "Name 名称", fn: (a, b) => a.name.localeCompare(b.name) },
-  qty_desc: { label: "Quantity: high → low 库存多到少", fn: (a, b) => b.quantity - a.quantity },
-  qty_asc: { label: "Quantity: low → high 库存少到多", fn: (a, b) => a.quantity - b.quantity },
+  newest: "Newest 最新",
+  category: "Group by Category 按类别分组",
+  location: "Group by Location 按地点分组",
+  name: "Name 名称",
+  qty_desc: "Qty high→low 库存多到少",
+  qty_asc: "Qty low→high 库存少到多",
 };
 
-export default function WarehouseTab({ warehouse, reload }) {
+export default function WarehouseTab({ warehouse, reload, locations }) {
   const [takeFor, setTakeFor] = useState(null);
+  const [delFor, setDelFor] = useState(null);
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("All");
   const [loc, setLoc] = useState("All");
   const [sort, setSort] = useState("newest");
 
-  const items = useMemo(() => {
-    return warehouse
-      .filter((w) => (cat === "All" || w.category === cat) && (loc === "All" || w.location === loc) && w.name.toLowerCase().includes(q.toLowerCase()))
-      .sort(SORTS[sort].fn);
-  }, [warehouse, cat, loc, q, sort]);
+  let items = warehouse.filter((w) => (cat === "All" || w.category === cat) && (loc === "All" || w.location === loc) && w.name.toLowerCase().includes(q.toLowerCase()));
+
+  const grouped = sort === "location" || sort === "category";
+  const groupKey = sort === "location" ? "location" : "category";
+  const groupOrder = sort === "location" ? locations : CATEGORIES;
+
+  if (!grouped) {
+    items = [...items].sort((a, b) => {
+      if (sort === "name") return a.name.localeCompare(b.name);
+      if (sort === "qty_desc") return b.quantity - a.quantity;
+      if (sort === "qty_asc") return a.quantity - b.quantity;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+  }
+
+  let groups = [];
+  if (grouped) {
+    const map = {};
+    items.forEach((w) => { const k = w[groupKey] || "Other"; (map[k] = map[k] || []).push(w); });
+    const keys = [...groupOrder.filter((k) => map[k]), ...Object.keys(map).filter((k) => !groupOrder.includes(k))];
+    groups = keys.map((k) => ({ title: k, items: map[k].sort((a, b) => a.name.localeCompare(b.name)) }));
+  }
 
   const units = warehouse.reduce((n, w) => n + (+w.quantity || 0), 0);
+  const cardGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px,1fr))", gap: 18 };
+
+  const del = async () => {
+    await supabase.from("warehouse").delete().eq("id", delFor.id);
+    setDelFor(null);
+    reload();
+  };
 
   return (
     <div>
@@ -46,40 +71,72 @@ export default function WarehouseTab({ warehouse, reload }) {
           <input style={{ ...inp, paddingLeft: 36 }} placeholder="Search items… 搜索" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <select style={{ ...inp, width: "auto" }} value={cat} onChange={(e) => setCat(e.target.value)} title="Category"><option>All</option>{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
-        <select style={{ ...inp, width: "auto" }} value={loc} onChange={(e) => setLoc(e.target.value)} title="Location"><option value="All">All locations</option>{LOCATIONS.map((l) => <option key={l}>{l}</option>)}</select>
+        <select style={{ ...inp, width: "auto" }} value={loc} onChange={(e) => setLoc(e.target.value)} title="Location"><option value="All">All locations</option>{locations.map((l) => <option key={l}>{l}</option>)}</select>
         <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, padding: "0 10px" }}>
           <ArrowUpDown size={14} color={C.sub} />
           <select style={{ ...inp, width: "auto", border: "none", padding: "9px 4px", background: "transparent" }} value={sort} onChange={(e) => setSort(e.target.value)}>
-            {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </div>
       </div>
 
       {items.length === 0 && <Empty icon={Warehouse} en="Warehouse is empty" zh="确认并开箱后的物品会入库到这里" />}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px,1fr))", gap: 18 }}>
-        {items.map((w) => (
-          <div key={w.id} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 2px 12px rgba(0,0,0,.03)" }}>
-            {w.image_url ? <img src={w.image_url} alt="" style={{ width: "100%", height: 150, objectFit: "cover" }} />
-              : <div style={{ height: 150, background: C.panel, display: "flex", alignItems: "center", justifyContent: "center" }}><Package size={36} color={C.subLt} /></div>}
-            <div style={{ padding: 16, flex: 1, display: "flex", flexDirection: "column" }}>
-              <div style={{ marginBottom: 6 }}><Badge tone="gold">{w.category}</Badge></div>
-              <div style={{ fontFamily: serif, fontWeight: 600, fontSize: 20, color: C.text }}>{w.name}</div>
-              <div style={{ fontSize: 12, color: C.sub, marginTop: 3 }}><MapPin size={11} style={{ verticalAlign: -1 }} /> {w.location}</div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 7, margin: "12px 0" }}>
-                <span style={{ fontFamily: serif, fontSize: 40, fontWeight: 700, color: w.quantity <= 0 ? "#9c5548" : C.text, lineHeight: 1 }}>{w.quantity}</span>
-                <span style={{ fontSize: 12, color: C.sub }}>in stock 库存</span>
+      {grouped ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 34 }}>
+          {groups.map((g) => {
+            const gUnits = g.items.reduce((n, w) => n + (+w.quantity || 0), 0);
+            return (
+              <div key={g.title}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {sort === "location" ? <MapPin size={18} color={C.gold} /> : <Package size={18} color={C.gold} />}
+                    <h2 style={{ margin: 0, fontFamily: serif, fontSize: 26, fontWeight: 600, color: C.text }}>{g.title}</h2>
+                  </div>
+                  <Badge tone="gold">{g.items.length} item{g.items.length !== 1 ? "s" : ""} · {gUnits} units</Badge>
+                  <div style={{ flex: 1, height: 1, background: C.line }} />
+                </div>
+                <div style={cardGrid}>
+                  {g.items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} />)}
+                </div>
               </div>
-              <div style={{ marginTop: "auto" }}>
-                <Btn size="sm" variant="primary" onClick={() => setTakeFor(w)} disabled={w.quantity <= 0} style={{ width: "100%" }}><ArrowRight size={14} /> Take Item 出库</Btn>
-              </div>
-              {(w.take_log?.length || 0) > 0 && <TakeLog log={w.take_log} />}
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={cardGrid}>
+          {items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} />)}
+        </div>
+      )}
 
-      {takeFor && <TakeModal item={takeFor} onClose={() => setTakeFor(null)} reload={reload} />}
+      {takeFor && <TakeModal item={takeFor} onClose={() => setTakeFor(null)} reload={reload} locations={locations} />}
+      {delFor && <ConfirmModal
+        title="Delete from warehouse 从仓库删除"
+        message={`Delete "${delFor.name}" (${delFor.quantity} in stock) permanently? This also removes its take-out history.`}
+        onCancel={() => setDelFor(null)} onConfirm={del} />}
+    </div>
+  );
+}
+
+function StockCard({ w, onTake, onDelete }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 2px 12px rgba(0,0,0,.03)" }}>
+      {w.image_url ? <img src={w.image_url} alt="" style={{ width: "100%", height: 150, objectFit: "cover" }} />
+        : <div style={{ height: 150, background: C.panel, display: "flex", alignItems: "center", justifyContent: "center" }}><Package size={36} color={C.subLt} /></div>}
+      <div style={{ padding: 16, flex: 1, display: "flex", flexDirection: "column" }}>
+        <div style={{ marginBottom: 6 }}><Badge tone="gold">{w.category}</Badge></div>
+        <div style={{ fontFamily: serif, fontWeight: 600, fontSize: 20, color: C.text }}>{w.name}</div>
+        <div style={{ fontSize: 12, color: C.sub, marginTop: 3 }}><MapPin size={11} style={{ verticalAlign: -1 }} /> {w.location}</div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 7, margin: "12px 0" }}>
+          <span style={{ fontFamily: serif, fontSize: 40, fontWeight: 700, color: w.quantity <= 0 ? "#9c5548" : C.text, lineHeight: 1 }}>{w.quantity}</span>
+          <span style={{ fontSize: 12, color: C.sub }}>in stock 库存</span>
+        </div>
+        <div style={{ marginTop: "auto", display: "flex", gap: 8 }}>
+          <Btn size="sm" variant="primary" onClick={onTake} disabled={w.quantity <= 0} style={{ flex: 1 }}><ArrowRight size={14} /> Take Item 出库</Btn>
+          <Btn size="sm" variant="danger" onClick={onDelete} style={{ padding: "6px 10px" }}><Trash2 size={14} /></Btn>
+        </div>
+        {(w.take_log?.length || 0) > 0 && <TakeLog log={w.take_log} />}
+      </div>
     </div>
   );
 }
@@ -99,9 +156,27 @@ function TakeLog({ log }) {
   );
 }
 
-function TakeModal({ item, onClose, reload }) {
+function ConfirmModal({ title, message, onCancel, onConfirm }) {
+  return (
+    <div onClick={onCancel} style={{ position: "fixed", inset: 0, background: "rgba(26,21,18,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 60 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, padding: 26, width: "100%", maxWidth: 380 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 999, background: "#f3e0dc", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Trash2 size={18} color="#9c5548" /></div>
+          <h3 style={{ margin: 0, fontFamily: serif, fontSize: 22, fontWeight: 600, color: C.text }}>{title}</h3>
+        </div>
+        <div style={{ fontSize: 14, color: C.sub, marginBottom: 20, lineHeight: 1.5 }}>{message}</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Btn variant="ghost" onClick={onCancel} style={{ flex: 1 }}>Cancel 取消</Btn>
+          <Btn onClick={onConfirm} style={{ flex: 1, background: "#9c5548", color: "#fff" }}><Trash2 size={14} /> Delete 删除</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TakeModal({ item, onClose, reload, locations }) {
   const [qty, setQty] = useState(1);
-  const [to, setTo] = useState(LOCATIONS[0]);
+  const [to, setTo] = useState(locations[0]);
   const [note, setNote] = useState("");
   const max = item.quantity;
   const submit = async () => {
@@ -120,7 +195,7 @@ function TakeModal({ item, onClose, reload }) {
         </div>
         <div style={{ fontSize: 13, color: C.sub, marginBottom: 20 }}>{item.name} · {max} available</div>
         <Field label="Quantity to send 出库数量"><input style={inp} type="number" min="1" max={max} value={qty} onChange={(e) => setQty(e.target.value)} autoFocus /></Field>
-        <Field label="Send To 送往"><select style={inp} value={to} onChange={(e) => setTo(e.target.value)}>{LOCATIONS.map((l) => <option key={l}>{l}</option>)}</select></Field>
+        <Field label="Send To 送往"><select style={inp} value={to} onChange={(e) => setTo(e.target.value)}>{locations.map((l) => <option key={l}>{l}</option>)}</select></Field>
         <Field label="Note (optional) 备注"><input style={inp} value={note} onChange={(e) => setNote(e.target.value)} placeholder="who / purpose" /></Field>
         <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
           <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }}>Cancel</Btn>
