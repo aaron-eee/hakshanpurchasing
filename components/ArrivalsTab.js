@@ -42,7 +42,7 @@ export default function ArrivalsTab({ items, reload }) {
     const p = it.purchases[0];
     const { data: w } = await supabase.from("warehouse").insert({
       item_id: it.id, name: it.name, category: it.category, image_url: p.image_url,
-      quantity: p.quantity, location: p.location, stocked_on: todayISO(),
+      quantity: p.quantity, unit_price: p.unit_price, location: p.location, stocked_on: todayISO(),
     }).select().single();
     await supabase.from("items").update({ status: "in_warehouse" }).eq("id", it.id);
     reload();
@@ -135,3 +135,4 @@ function PhotoModal({ item, onClose, reload }) {
     </div>
   );
 }
+
