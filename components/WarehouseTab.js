@@ -1,8 +1,9 @@
 "use client";
-import React, { useState, useMemo } from "react";
-import { Search, Warehouse, Package, MapPin, ArrowRight, Check, X, ChevronDown, ChevronRight, ArrowUpDown, Trash2 } from "lucide-react";
+import React, { useState } from "react";
+import { Search, Warehouse, Package, MapPin, ArrowRight, Check, X, ChevronDown, ChevronRight, ArrowUpDown, Trash2, Plus, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { C, serif, inp, Field, Badge, Btn, Empty, Head } from "./ui";
+import { C, serif, inp, Field, Badge, Btn, Empty, Head, fmtMoney } from "./ui";
+import ImageInput from "./ImageInput";
 import { CATEGORIES } from "../lib/constants";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -19,6 +20,8 @@ const SORTS = {
 export default function WarehouseTab({ warehouse, reload, locations }) {
   const [takeFor, setTakeFor] = useState(null);
   const [delFor, setDelFor] = useState(null);
+  const [editFor, setEditFor] = useState(null);
+  const [adding, setAdding] = useState(false);
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("All");
   const [loc, setLoc] = useState("All");
@@ -48,6 +51,7 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
   }
 
   const units = warehouse.reduce((n, w) => n + (+w.quantity || 0), 0);
+  const totalValue = warehouse.reduce((n, w) => n + (+w.quantity || 0) * (+w.unit_price || 0), 0);
   const cardGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px,1fr))", gap: 18 };
 
   const del = async () => {
@@ -59,9 +63,16 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
   return (
     <div>
       <Head eyebrow="INVENTORY" en="Warehouse Stock" zh="仓库库存"
-        right={<div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 11, letterSpacing: ".2em", color: C.sub }}>TOTAL</div>
-          <div style={{ fontFamily: serif, fontSize: 30, fontWeight: 600, color: C.text }}>{units} <span style={{ fontSize: 16, color: C.sub }}>units</span></div>
+        right={<div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 11, letterSpacing: ".2em", color: C.sub }}>TOTAL VALUE 总价值</div>
+            <div style={{ fontFamily: serif, fontSize: 28, fontWeight: 600, color: C.text }}>{fmtMoney(totalValue)}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 11, letterSpacing: ".2em", color: C.sub }}>UNITS 数量</div>
+            <div style={{ fontFamily: serif, fontSize: 28, fontWeight: 600, color: C.text }}>{units}</div>
+          </div>
+          <Btn variant="gold" onClick={() => setAdding(true)}><Plus size={16} /> Add Item</Btn>
         </div>} />
       <p style={{ margin: "-8px 0 20px", color: C.sub, fontSize: 13.5 }}>Press <b style={{ color: C.text }}>Take Item</b> to send stock out — record the destination and the quantity drops automatically.</p>
 
@@ -80,12 +91,13 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
         </div>
       </div>
 
-      {items.length === 0 && <Empty icon={Warehouse} en="Warehouse is empty" zh="确认并开箱后的物品会入库到这里" />}
+      {items.length === 0 && <Empty icon={Warehouse} en="Warehouse is empty" zh="确认并开箱后的物品会入库到这里，或按 Add Item 手动添加" />}
 
       {grouped ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 34 }}>
           {groups.map((g) => {
             const gUnits = g.items.reduce((n, w) => n + (+w.quantity || 0), 0);
+            const gValue = g.items.reduce((n, w) => n + (+w.quantity || 0) * (+w.unit_price || 0), 0);
             return (
               <div key={g.title}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
@@ -93,11 +105,11 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
                     {sort === "location" ? <MapPin size={18} color={C.gold} /> : <Package size={18} color={C.gold} />}
                     <h2 style={{ margin: 0, fontFamily: serif, fontSize: 26, fontWeight: 600, color: C.text }}>{g.title}</h2>
                   </div>
-                  <Badge tone="gold">{g.items.length} item{g.items.length !== 1 ? "s" : ""} · {gUnits} units</Badge>
+                  <Badge tone="gold">{g.items.length} item{g.items.length !== 1 ? "s" : ""} · {gUnits} units · {fmtMoney(gValue)}</Badge>
                   <div style={{ flex: 1, height: 1, background: C.line }} />
                 </div>
                 <div style={cardGrid}>
-                  {g.items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} />)}
+                  {g.items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} />)}
                 </div>
               </div>
             );
@@ -105,11 +117,13 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
         </div>
       ) : (
         <div style={cardGrid}>
-          {items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} />)}
+          {items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} />)}
         </div>
       )}
 
       {takeFor && <TakeModal item={takeFor} onClose={() => setTakeFor(null)} reload={reload} locations={locations} />}
+      {adding && <ItemFormModal mode="add" onClose={() => setAdding(false)} reload={reload} locations={locations} />}
+      {editFor && <ItemFormModal mode="edit" item={editFor} onClose={() => setEditFor(null)} reload={reload} locations={locations} />}
       {delFor && <ConfirmModal
         title="Delete from warehouse 从仓库删除"
         message={`Delete "${delFor.name}" (${delFor.quantity} in stock) permanently? This also removes its take-out history.`}
@@ -118,18 +132,26 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
   );
 }
 
-function StockCard({ w, onTake, onDelete }) {
+function StockCard({ w, onTake, onDelete, onEdit }) {
+  const total = (+w.quantity || 0) * (+w.unit_price || 0);
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 2px 12px rgba(0,0,0,.03)" }}>
       {w.image_url ? <img src={w.image_url} alt="" style={{ width: "100%", height: 150, objectFit: "cover" }} />
         : <div style={{ height: 150, background: C.panel, display: "flex", alignItems: "center", justifyContent: "center" }}><Package size={36} color={C.subLt} /></div>}
       <div style={{ padding: 16, flex: 1, display: "flex", flexDirection: "column" }}>
-        <div style={{ marginBottom: 6 }}><Badge tone="gold">{w.category}</Badge></div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <Badge tone="gold">{w.category}</Badge>
+          <button onClick={onEdit} title="Edit" style={{ border: "none", background: "none", cursor: "pointer", color: C.sub, display: "flex", alignItems: "center", padding: 2 }}><Pencil size={15} /></button>
+        </div>
         <div style={{ fontFamily: serif, fontWeight: 600, fontSize: 20, color: C.text }}>{w.name}</div>
         <div style={{ fontSize: 12, color: C.sub, marginTop: 3 }}><MapPin size={11} style={{ verticalAlign: -1 }} /> {w.location}</div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 7, margin: "12px 0" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 7, margin: "12px 0 6px" }}>
           <span style={{ fontFamily: serif, fontSize: 40, fontWeight: 700, color: w.quantity <= 0 ? "#9c5548" : C.text, lineHeight: 1 }}>{w.quantity}</span>
           <span style={{ fontSize: 12, color: C.sub }}>in stock 库存</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.sub, marginBottom: 12, paddingTop: 8, borderTop: `1px solid ${C.line}` }}>
+          <span>Unit 单价 <b style={{ color: C.text }}>{fmtMoney(w.unit_price)}</b></span>
+          <span>Total 总价值 <b style={{ color: C.goldDk }}>{fmtMoney(total)}</b></span>
         </div>
         <div style={{ marginTop: "auto", display: "flex", gap: 8 }}>
           <Btn size="sm" variant="primary" onClick={onTake} disabled={w.quantity <= 0} style={{ flex: 1 }}><ArrowRight size={14} /> Take Item 出库</Btn>
@@ -152,6 +174,61 @@ function TakeLog({ log }) {
         {log.map((l) => <div key={l.id} style={{ fontSize: 12, color: C.text, display: "flex", justifyContent: "space-between" }}>
           <span>−{l.qty} → {l.destination}{l.note ? ` (${l.note})` : ""}</span><span style={{ color: C.subLt }}>{l.taken_on}</span></div>)}
       </div>}
+    </div>
+  );
+}
+
+function ItemFormModal({ mode, item, onClose, reload, locations }) {
+  const [name, setName] = useState(item?.name || "");
+  const [category, setCategory] = useState(item?.category || CATEGORIES[0]);
+  const [quantity, setQuantity] = useState(item?.quantity ?? 1);
+  const [unitPrice, setUnitPrice] = useState(item?.unit_price ?? "");
+  const [location, setLocation] = useState(item?.location || locations[0]);
+  const [image, setImage] = useState(item?.image_url || "");
+  const [busy, setBusy] = useState(false);
+
+  const canSave = name.trim() && quantity !== "" && location;
+
+  const save = async () => {
+    if (!canSave) { alert("Please fill in name, quantity and location."); return; }
+    setBusy(true);
+    const payload = {
+      name: name.trim(), category, quantity: Number(quantity) || 0,
+      unit_price: unitPrice === "" ? null : Number(unitPrice),
+      location, image_url: image || null,
+    };
+    let error;
+    if (mode === "add") {
+      ({ error } = await supabase.from("warehouse").insert({ ...payload, stocked_on: todayISO() }));
+    } else {
+      ({ error } = await supabase.from("warehouse").update(payload).eq("id", item.id));
+    }
+    setBusy(false);
+    if (error) { alert("Save failed: " + error.message); return; }
+    reload();
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(26,21,18,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50, overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, padding: 26, width: "100%", maxWidth: 460, boxShadow: "0 20px 60px rgba(0,0,0,.25)", margin: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontFamily: serif, fontSize: 24, fontWeight: 600, color: C.text }}>{mode === "add" ? "Add Item" : "Edit Item"} <span style={{ color: C.gold, fontSize: 17 }}>{mode === "add" ? "添加物品" : "编辑物品"}</span></h3>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer" }}><X size={19} color={C.sub} /></button>
+        </div>
+        <Field label="Name 名称"><input style={inp} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wooden Chair" autoFocus /></Field>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Field label="Category 类别"><select style={inp} value={category} onChange={(e) => setCategory(e.target.value)}>{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select></Field>
+          <Field label="Location 地点"><select style={inp} value={location} onChange={(e) => setLocation(e.target.value)}>{locations.map((l) => <option key={l}>{l}</option>)}</select></Field>
+          <Field label="Quantity 数量"><input style={inp} type="number" min="0" value={quantity} onChange={(e) => setQuantity(e.target.value)} /></Field>
+          <Field label="Unit Price (RM) 单价"><input style={inp} type="number" step="0.01" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} placeholder="0.00" /></Field>
+        </div>
+        <Field label="Photo 照片"><ImageInput value={image} onChange={setImage} height={150} /></Field>
+        <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+          <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }}>Cancel 取消</Btn>
+          <Btn variant="gold" onClick={save} disabled={busy || !canSave} style={{ flex: 1 }}><Check size={15} /> {mode === "add" ? "Add 添加" : "Save 保存"}</Btn>
+        </div>
+      </div>
     </div>
   );
 }
@@ -205,3 +282,4 @@ function TakeModal({ item, onClose, reload, locations }) {
     </div>
   );
 }
+
