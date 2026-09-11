@@ -1,6 +1,6 @@
 "use client";
 import React, { useState } from "react";
-import { Search, Warehouse, Package, MapPin, ArrowRight, Check, X, ChevronDown, ChevronRight, ArrowUpDown, Trash2, Plus, Pencil } from "lucide-react";
+import { Search, Warehouse, Package, MapPin, ArrowRight, Check, X, ChevronDown, ChevronRight, ArrowUpDown, Trash2, Plus, Pencil, PackagePlus } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { C, serif, inp, Field, Badge, Btn, Empty, Head, fmtMoney } from "./ui";
 import ImageInput from "./ImageInput";
@@ -19,6 +19,7 @@ const SORTS = {
 
 export default function WarehouseTab({ warehouse, reload, locations }) {
   const [takeFor, setTakeFor] = useState(null);
+  const [stockFor, setStockFor] = useState(null);
   const [delFor, setDelFor] = useState(null);
   const [editFor, setEditFor] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -109,7 +110,7 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
                   <div style={{ flex: 1, height: 1, background: C.line }} />
                 </div>
                 <div style={cardGrid}>
-                  {g.items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} />)}
+                  {g.items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} onAddStock={() => setStockFor(w)} />)}
                 </div>
               </div>
             );
@@ -117,11 +118,12 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
         </div>
       ) : (
         <div style={cardGrid}>
-          {items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} />)}
+          {items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} onAddStock={() => setStockFor(w)} />)}
         </div>
       )}
 
       {takeFor && <TakeModal item={takeFor} onClose={() => setTakeFor(null)} reload={reload} locations={locations} />}
+      {stockFor && <AddStockModal item={stockFor} onClose={() => setStockFor(null)} reload={reload} />}
       {adding && <ItemFormModal mode="add" onClose={() => setAdding(false)} reload={reload} locations={locations} />}
       {editFor && <ItemFormModal mode="edit" item={editFor} onClose={() => setEditFor(null)} reload={reload} locations={locations} />}
       {delFor && <ConfirmModal
@@ -132,7 +134,7 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
   );
 }
 
-function StockCard({ w, onTake, onDelete, onEdit }) {
+function StockCard({ w, onTake, onDelete, onEdit, onAddStock }) {
   const total = (+w.quantity || 0) * (+w.unit_price || 0);
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 2px 12px rgba(0,0,0,.03)" }}>
@@ -155,6 +157,7 @@ function StockCard({ w, onTake, onDelete, onEdit }) {
         </div>
         <div style={{ marginTop: "auto", display: "flex", gap: 8 }}>
           <Btn size="sm" variant="primary" onClick={onTake} disabled={w.quantity <= 0} style={{ flex: 1 }}><ArrowRight size={14} /> Take Item 出库</Btn>
+          <Btn size="sm" variant="gold" onClick={onAddStock} style={{ padding: "6px 10px" }} title="Stock Arrived 到货"><PackagePlus size={14} /></Btn>
           <Btn size="sm" variant="danger" onClick={onDelete} style={{ padding: "6px 10px" }}><Trash2 size={14} /></Btn>
         </div>
         {(w.take_log?.length || 0) > 0 && <TakeLog log={w.take_log} />}
@@ -168,11 +171,20 @@ function TakeLog({ log }) {
   return (
     <div style={{ marginTop: 12, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
       <button onClick={() => setOpen((o) => !o)} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 12, color: C.sub, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} History ({log.length}) 出库记录
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} History ({log.length}) 出入库记录
       </button>
       {open && <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
-        {log.map((l) => <div key={l.id} style={{ fontSize: 12, color: C.text, display: "flex", justifyContent: "space-between" }}>
-          <span>−{l.qty} → {l.destination}{l.note ? ` (${l.note})` : ""}</span><span style={{ color: C.subLt }}>{l.taken_on}</span></div>)}
+        {log.map((l) => {
+          const isIn = l.kind === "in";
+          return (
+            <div key={l.id} style={{ fontSize: 12, color: C.text, display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: isIn ? "#4a6b47" : C.text }}>
+                {isIn ? `+${l.qty} 到货` : `−${l.qty} → ${l.destination}`}{l.note ? ` (${l.note})` : ""}
+              </span>
+              <span style={{ color: C.subLt }}>{l.taken_on}</span>
+            </div>
+          );
+        })}
       </div>}
     </div>
   );
@@ -283,3 +295,36 @@ function TakeModal({ item, onClose, reload, locations }) {
   );
 }
 
+
+function AddStockModal({ item, onClose, reload }) {
+  const [qty, setQty] = useState(1);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const n = Math.max(1, +qty || 1);
+    setBusy(true);
+    await supabase.from("take_log").insert({ warehouse_id: item.id, qty: n, destination: "到货 Stock Arrived", note, kind: "in" });
+    await supabase.from("warehouse").update({ quantity: (item.quantity || 0) + n }).eq("id", item.id);
+    setBusy(false);
+    reload();
+    onClose();
+  };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(26,21,18,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, padding: 26, width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <h3 style={{ margin: 0, fontFamily: serif, fontSize: 24, fontWeight: 600, color: C.text }}>Stock Arrived <span style={{ color: C.gold, fontSize: 17 }}>到货</span></h3>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer" }}><X size={19} color={C.sub} /></button>
+        </div>
+        <div style={{ fontSize: 13, color: C.sub, marginBottom: 20 }}>{item.name} · currently {item.quantity} in stock</div>
+        <Field label="Quantity to add 增加数量"><input style={inp} type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} autoFocus /></Field>
+        <Field label="Note (optional) 备注"><input style={inp} value={note} onChange={(e) => setNote(e.target.value)} placeholder="new batch / supplier…" /></Field>
+        <div style={{ fontSize: 13, color: C.goldDk, marginBottom: 8 }}>New total 新库存: <b>{(item.quantity || 0) + (+qty || 0)}</b></div>
+        <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+          <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }}>Cancel</Btn>
+          <Btn variant="gold" onClick={submit} disabled={busy} style={{ flex: 1 }}><Check size={15} /> Confirm 确认到货</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
