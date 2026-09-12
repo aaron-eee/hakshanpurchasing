@@ -12,7 +12,7 @@ import SettingsTab from "../components/SettingsTab";
 import { daysBetween } from "../lib/constants";
 
 function Logo() {
-  return <img src="/logo.png" alt="HAKSHAN 客善" style={{ width: 150, height: "auto", display: "block", margin: "0 auto" }} />;
+  return <img src="https://raw.githubusercontent.com/aaron-eee/hakshanpurchasing/main/public/logo.png" alt="HAKSHAN 客善" style={{ width: 150, height: "auto", display: "block", margin: "0 auto" }} />;
 }
 
 export default function Page() {
@@ -20,14 +20,19 @@ export default function Page() {
   const [items, setItems] = useState(null);
   const [warehouse, setWarehouse] = useState(null);
   const [locations, setLocations] = useState([]);
+  const [bulk, setBulk] = useState({ orders: [], items: [], allocs: [] });
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
-    const [{ data: its }, { data: wh }, { data: locs }] = await Promise.all([
+    const [{ data: its }, { data: wh }, { data: locs }, { data: bOrders }, { data: bItems }, { data: bAllocs }] = await Promise.all([
       supabase.from("items").select("*, suppliers(*), purchases(*)").order("created_at", { ascending: false }),
       supabase.from("warehouse").select("*, take_log(*)").order("created_at", { ascending: false }),
       supabase.from("locations").select("*").order("sort_ord", { ascending: true }),
+      supabase.from("bulk_orders").select("*"),
+      supabase.from("bulk_order_items").select("*"),
+      supabase.from("bulk_order_allocations").select("*"),
     ]);
+    setBulk({ orders: bOrders || [], items: bItems || [], allocs: bAllocs || [] });
     (its || []).forEach((it) => {
       it.suppliers?.sort((a, b) => a.sort_ord - b.sort_ord);
       if (it.purchases && !Array.isArray(it.purchases)) it.purchases = [it.purchases];
@@ -120,7 +125,7 @@ export default function Page() {
         <div style={{ padding: "8px 32px 60px", maxWidth: 1180 }}>
           {tab === "sourcing" && <SourcingTab items={items} reload={reload} locations={locations} />}
           {tab === "arrivals" && <ArrivalsTab items={items} reload={reload} />}
-          {tab === "warehouse" && <WarehouseTab warehouse={warehouse} reload={reload} locations={locations} />}
+          {tab === "warehouse" && <WarehouseTab warehouse={warehouse} reload={reload} locations={locations} bulk={bulk} />}
           {tab === "settings" && <SettingsTab locations={locations} reload={reload} warehouse={warehouse} items={items} />}
         </div>
       </main>
