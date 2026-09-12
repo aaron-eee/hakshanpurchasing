@@ -8,6 +8,35 @@ import { CATEGORIES } from "../lib/constants";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+// Compute reserve / incoming info for a warehouse item from the bulk-order tables.
+function bulkInfo(w, bulk) {
+  const b = bulk || { orders: [], items: [], allocs: [] };
+  const orderById = Object.fromEntries((b.orders || []).map((o) => [o.id, o]));
+  const its = (b.items || []).filter((i) => i.warehouse_id === w.id);
+  const reserves = [], incoming = [];
+  let freeTotal = 0;
+  its.forEach((it) => {
+    const o = orderById[it.order_id];
+    if (!o) return;
+    const active = o.status === "confirmed" || o.status === "paid";
+    const allocs = (b.allocs || []).filter((a) => a.item_id === it.id);
+    const reservedQty = allocs.reduce((s, a) => s + Number(a.qty || 0), 0);
+    if (active) {
+      allocs.forEach((a) => {
+        const rem = Number(a.qty || 0) - Number(a.qty_taken || 0);
+        if (rem > 0) reserves.push({ store: a.store_name || "Store", rem, allocId: a.id, order: o.name, taken: Number(a.qty_taken || 0), qty: Number(a.qty || 0) });
+      });
+      const free = Number(it.qty_ordered || 0) - reservedQty;
+      if (free > 0) freeTotal += free;
+    }
+    if (o.status === "paid") {
+      const inc = Number(it.qty_ordered || 0) - Number(it.qty_arrived || 0);
+      if (inc > 0) incoming.push({ order: o.name, itemId: it.id, rem: inc, arrived: Number(it.qty_arrived || 0), ordered: Number(it.qty_ordered || 0) });
+    }
+  });
+  return { reserves, incoming, freeTotal, hasAny: reserves.length > 0 || incoming.length > 0 || freeTotal > 0 };
+}
+
 const SORTS = {
   newest: "Newest 最新",
   category: "Group by Category 按类别分组",
@@ -17,7 +46,7 @@ const SORTS = {
   qty_asc: "Qty low→high 库存少到多",
 };
 
-export default function WarehouseTab({ warehouse, reload, locations }) {
+export default function WarehouseTab({ warehouse, reload, locations, bulk }) {
   const [takeFor, setTakeFor] = useState(null);
   const [stockFor, setStockFor] = useState(null);
   const [delFor, setDelFor] = useState(null);
@@ -110,7 +139,7 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
                   <div style={{ flex: 1, height: 1, background: C.line }} />
                 </div>
                 <div style={cardGrid}>
-                  {g.items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} onAddStock={() => setStockFor(w)} />)}
+                  {g.items.map((w) => <StockCard key={w.id} w={w} info={bulkInfo(w, bulk)} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} onAddStock={() => setStockFor(w)} />)}
                 </div>
               </div>
             );
@@ -118,12 +147,12 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
         </div>
       ) : (
         <div style={cardGrid}>
-          {items.map((w) => <StockCard key={w.id} w={w} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} onAddStock={() => setStockFor(w)} />)}
+          {items.map((w) => <StockCard key={w.id} w={w} info={bulkInfo(w, bulk)} onTake={() => setTakeFor(w)} onDelete={() => setDelFor(w)} onEdit={() => setEditFor(w)} onAddStock={() => setStockFor(w)} />)}
         </div>
       )}
 
-      {takeFor && <TakeModal item={takeFor} onClose={() => setTakeFor(null)} reload={reload} locations={locations} />}
-      {stockFor && <AddStockModal item={stockFor} onClose={() => setStockFor(null)} reload={reload} />}
+      {takeFor && <TakeModal item={takeFor} info={bulkInfo(takeFor, bulk)} onClose={() => setTakeFor(null)} reload={reload} locations={locations} />}
+      {stockFor && <AddStockModal item={stockFor} info={bulkInfo(stockFor, bulk)} onClose={() => setStockFor(null)} reload={reload} />}
       {adding && <ItemFormModal mode="add" onClose={() => setAdding(false)} reload={reload} locations={locations} />}
       {editFor && <ItemFormModal mode="edit" item={editFor} onClose={() => setEditFor(null)} reload={reload} locations={locations} />}
       {delFor && <ConfirmModal
@@ -134,8 +163,9 @@ export default function WarehouseTab({ warehouse, reload, locations }) {
   );
 }
 
-function StockCard({ w, onTake, onDelete, onEdit, onAddStock }) {
+function StockCard({ w, onTake, onDelete, onEdit, onAddStock, info }) {
   const total = (+w.quantity || 0) * (+w.unit_price || 0);
+  const bi = info || { reserves: [], incoming: [], freeTotal: 0, hasAny: false };
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 2px 12px rgba(0,0,0,.03)" }}>
       {w.image_url ? <img src={w.image_url} alt="" style={{ width: "100%", height: 150, objectFit: "cover" }} />
@@ -155,6 +185,27 @@ function StockCard({ w, onTake, onDelete, onEdit, onAddStock }) {
           <span>Unit 单价 <b style={{ color: C.text }}>{fmtMoney(w.unit_price)}</b></span>
           <span>Total 总价值 <b style={{ color: C.goldDk }}>{fmtMoney(total)}</b></span>
         </div>
+
+        {bi.hasAny && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 12 }}>
+            {bi.incoming.map((inc, i) => (
+              <div key={"inc" + i} style={{ fontSize: 11.5, fontWeight: 600, color: "#7a5a1f", background: "#faf1dc", border: "1px solid #ecd9ab", borderRadius: 8, padding: "5px 9px" }}>
+                📦 {inc.rem} incoming · from {inc.order}
+              </div>
+            ))}
+            {bi.reserves.map((r, i) => (
+              <div key={"res" + i} style={{ fontSize: 11.5, fontWeight: 600, color: "#4a6b47", background: "#eef5ec", border: "1px solid #cfe3ca", borderRadius: 8, padding: "5px 9px" }}>
+                🔖 {r.rem} reserved → {r.store}{r.taken > 0 ? ` (${r.taken} taken)` : ""}
+              </div>
+            ))}
+            {bi.freeTotal > 0 && (
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: C.sub, background: C.panel, borderRadius: 8, padding: "5px 9px" }}>
+                {bi.freeTotal} ordered, not yet reserved
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ marginTop: "auto", display: "flex", gap: 8 }}>
           <Btn size="sm" variant="primary" onClick={onTake} disabled={w.quantity <= 0} style={{ flex: 1 }}><ArrowRight size={14} /> Take Item 出库</Btn>
           <Btn size="sm" variant="gold" onClick={onAddStock} style={{ padding: "6px 10px" }} title="Stock Arrived 到货"><PackagePlus size={14} /></Btn>
@@ -263,15 +314,23 @@ function ConfirmModal({ title, message, onCancel, onConfirm }) {
   );
 }
 
-function TakeModal({ item, onClose, reload, locations }) {
+function TakeModal({ item, onClose, reload, locations, info }) {
+  const reserves = (info && info.reserves) || [];
   const [qty, setQty] = useState(1);
-  const [to, setTo] = useState(locations[0]);
+  const [dest, setDest] = useState(reserves.length ? "res:" + reserves[0].allocId : (locations[0] || ""));
   const [note, setNote] = useState("");
   const max = item.quantity;
+  const res = dest.startsWith("res:") ? reserves.find((r) => "res:" + r.allocId === dest) : null;
   const submit = async () => {
     const n = Math.min(Math.max(1, +qty || 1), max);
-    await supabase.from("take_log").insert({ warehouse_id: item.id, qty: n, destination: to, note });
+    const destName = res ? res.store : dest;
+    const noteFull = res ? (note ? note + " · " : "") + "reserved for " + res.store + " · " + res.order : note;
+    await supabase.from("take_log").insert({ warehouse_id: item.id, qty: n, destination: destName, note: noteFull });
     await supabase.from("warehouse").update({ quantity: max - n }).eq("id", item.id);
+    if (res) {
+      const newTaken = Math.min(res.qty, res.taken + n);
+      await supabase.from("bulk_order_allocations").update({ qty_taken: newTaken }).eq("id", res.allocId);
+    }
     reload();
     onClose();
   };
@@ -284,7 +343,19 @@ function TakeModal({ item, onClose, reload, locations }) {
         </div>
         <div style={{ fontSize: 13, color: C.sub, marginBottom: 20 }}>{item.name} · {max} available</div>
         <Field label="Quantity to send 出库数量"><input style={inp} type="number" min="1" max={max} value={qty} onChange={(e) => setQty(e.target.value)} autoFocus /></Field>
-        <Field label="Send To 送往"><select style={inp} value={to} onChange={(e) => setTo(e.target.value)}>{locations.map((l) => <option key={l}>{l}</option>)}</select></Field>
+        <Field label="Send To 送往">
+          <select style={inp} value={dest} onChange={(e) => setDest(e.target.value)}>
+            {reserves.length > 0 && (
+              <optgroup label="Reserved store 预留的店">
+                {reserves.map((r) => <option key={r.allocId} value={"res:" + r.allocId}>🔖 {r.store} · {r.rem} reserved ({r.order})</option>)}
+              </optgroup>
+            )}
+            <optgroup label="Location 地点">
+              {locations.map((l) => <option key={l} value={l}>{l}</option>)}
+            </optgroup>
+          </select>
+        </Field>
+        {res && <div style={{ fontSize: 12, color: "#4a6b47", marginTop: -6, marginBottom: 10 }}>This clears the reservation for {res.store} as you send it out.</div>}
         <Field label="Note (optional) 备注"><input style={inp} value={note} onChange={(e) => setNote(e.target.value)} placeholder="who / purpose" /></Field>
         <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
           <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }}>Cancel</Btn>
@@ -296,15 +367,23 @@ function TakeModal({ item, onClose, reload, locations }) {
 }
 
 
-function AddStockModal({ item, onClose, reload }) {
+function AddStockModal({ item, onClose, reload, info }) {
+  const incoming = (info && info.incoming) || [];
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
+  const [fromId, setFromId] = useState(incoming.length ? incoming[0].itemId : "");
   const [busy, setBusy] = useState(false);
+  const from = incoming.find((i) => i.itemId === fromId);
   const submit = async () => {
     const n = Math.max(1, +qty || 1);
     setBusy(true);
-    await supabase.from("take_log").insert({ warehouse_id: item.id, qty: n, destination: "到货 Stock Arrived", note, kind: "in" });
+    const noteFull = from ? (note ? note + " · " : "") + "from " + from.order : note;
+    await supabase.from("take_log").insert({ warehouse_id: item.id, qty: n, destination: from ? "到货 · " + from.order : "到货 Stock Arrived", note: noteFull, kind: "in" });
     await supabase.from("warehouse").update({ quantity: (item.quantity || 0) + n }).eq("id", item.id);
+    if (from) {
+      const newArrived = Math.min(from.ordered, from.arrived + n);
+      await supabase.from("bulk_order_items").update({ qty_arrived: newArrived }).eq("id", from.itemId);
+    }
     setBusy(false);
     reload();
     onClose();
@@ -317,6 +396,14 @@ function AddStockModal({ item, onClose, reload }) {
           <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer" }}><X size={19} color={C.sub} /></button>
         </div>
         <div style={{ fontSize: 13, color: C.sub, marginBottom: 20 }}>{item.name} · currently {item.quantity} in stock</div>
+        {incoming.length > 0 && (
+          <Field label="From a bulk order? 是否来自某个订单">
+            <select style={inp} value={fromId} onChange={(e) => setFromId(e.target.value)}>
+              {incoming.map((i) => <option key={i.itemId} value={i.itemId}>From {i.order} · {i.rem} still incoming</option>)}
+              <option value="">Not from a bulk order 不是</option>
+            </select>
+          </Field>
+        )}
         <Field label="Quantity to add 增加数量"><input style={inp} type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} autoFocus /></Field>
         <Field label="Note (optional) 备注"><input style={inp} value={note} onChange={(e) => setNote(e.target.value)} placeholder="new batch / supplier…" /></Field>
         <div style={{ fontSize: 13, color: C.goldDk, marginBottom: 8 }}>New total 新库存: <b>{(item.quantity || 0) + (+qty || 0)}</b></div>
